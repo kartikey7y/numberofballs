@@ -1,11 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import RAPIER from "@dimforge/rapier3d-compat";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+// import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 const BallGame = () => {
   const threeRef = useRef<HTMLDivElement>(null);
+  const [hitCount, setHitCount] = useState(0);
 
   useEffect(() => {
     let width = window.innerWidth;
@@ -32,12 +33,19 @@ const BallGame = () => {
       // Camera setup
       const camera = new THREE.PerspectiveCamera(55, width / height, 0.5, 100);
       camera.position.set(0, 12, 4);
+      if (window.innerWidth < 512) {
+        camera.position.set(0, 21, 4);
+      }
       camera.lookAt(0, 0, 0);
 
       // new OrbitControls(camera, renderer.domElement);
       // Lights
       const light = new THREE.AmbientLight(0xffffff, 1);
       scene.add(light);
+
+      //directional light
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      scene.add(directionalLight);
 
       const spotlight = new THREE.SpotLight();
       spotlight.position.set(0, 3, 4);
@@ -55,21 +63,78 @@ const BallGame = () => {
       ball.castShadow = true;
       ball.position.set(0, 0.6, 2);
       scene.add(ball);
-
       // Create ball physics body
       const ballBody = world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 0.6, 2)
       );
-      const ballShape = RAPIER.ColliderDesc.ball(0.5)
+      const ballShape = RAPIER.ColliderDesc.ball(0.35)
         .setMass(1)
         .setRestitution(0.8);
       world.createCollider(ballShape, ballBody);
       dynamicBodies.push([ball, ballBody]);
+      //target ball
+      const targetBallGeomerty = new THREE.SphereGeometry(0.5, 32, 32);
+      const targetBallMaterial = new THREE.MeshStandardMaterial({
+        color: 0xcc0000,
+        metalness: 0.7,
+        roughness: 0.7,
+      });
+      const targetBall = new THREE.Mesh(targetBallGeomerty, targetBallMaterial);
+      targetBall.castShadow = true;
+      targetBall.position.set(0, 0.6, -4);
+      scene.add(targetBall);
+      //creating target ball physics body
+      const targetBallBody = world.createRigidBody(
+        RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 0.6, -4)
+      );
+      const targetBallShape = RAPIER.ColliderDesc.ball(0.35)
+        .setMass(1)
+        .setRestitution(0.8);
+      world.createCollider(targetBallShape, targetBallBody);
+      dynamicBodies.push([targetBall, targetBallBody]);
+      //check if ball is on plane or not
+      const checkIfBallOnPlane = () => {
+        const ballY = ballBody.translation().y;
+        const planeY = -0.5;
+        if (ballY <= planeY + 0.1) {
+          // **Ball position reset in Rapier (Physics Engine)**
+          ballBody.setTranslation({ x: 0, y: 0.6, z: 2 }, true);
+          ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true); // Stop velocity
+          targetBallBody.setTranslation({ x: 0, y: 0.6, z: -4 }, true);
+          targetBallBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+
+          // **Ball position reset in Three.js (Visual)**
+          ball.position.set(0, 0.6, 2);
+          targetBall.position.set(0, 0.6, -4);
+        }
+      };
+      //check ball collsion and increase hits
+      let hasCollided = false;
+      const checkBallCollisions = () => {
+        const ballCollider = ballBody.collider(0); // Player ball ka collider
+        const targetCollider = targetBallBody.collider(0); // Target ball ka collider
+
+        world.contactPairsWith(ballCollider, (otherCollider) => {
+          if (otherCollider === targetCollider && !hasCollided) {
+            hasCollided = true;
+            setHitCount((prevCount) => {
+              console.log(
+                `🎯 Ball ne target ko hit kiya! Total Hits: ${prevCount + 1}`
+              );
+              return prevCount + 1;
+            });
+            // Reset collision flag after 500ms
+            setTimeout(() => {
+              hasCollided = false;
+            }, 500);
+          }
+        });
+      };
 
       // Plane (ground)
       const planeGeometry = new THREE.PlaneGeometry(10, 10);
       const planeMaterial = new THREE.MeshStandardMaterial({
-        color: 0xffbf00,
+        color: 0xffd700,
         metalness: 0.7,
         roughness: 0.7,
         side: THREE.DoubleSide,
@@ -159,7 +224,7 @@ const BallGame = () => {
 
         if (ballBody) {
           ballBody.applyImpulse(
-            { x: (impulseX - 30), y: 0, z: (impulseZ - 30) },
+            { x: impulseX - 30, y: 0, z: impulseZ - 30 },
             true
           );
         }
@@ -168,13 +233,25 @@ const BallGame = () => {
       window.addEventListener("mousedown", onMouseDown);
       window.addEventListener("mousemove", onMouseMove);
       window.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+
+        // **Camera ka aspect ratio update karo**
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix(); // Required after aspect ratio change
+
+        // **Renderer ka size update karo**
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+      });
 
       // Animation loop
       const animate = () => {
         requestAnimationFrame(animate);
         if (!isDragging) {
-          ball.position.x += (velocity.x + 2);
-          ball.position.z += (velocity.z + 2);
+          ball.position.x += velocity.x + 2;
+          ball.position.z += velocity.z + 2;
           velocity.x *= friction;
           velocity.z *= friction;
         }
@@ -184,7 +261,8 @@ const BallGame = () => {
           obj.position.copy(body.translation());
           obj.quaternion.copy(body.rotation());
         });
-
+        checkIfBallOnPlane();
+        checkBallCollisions();
         renderer.render(scene, camera);
         stats.update();
       };
@@ -210,7 +288,16 @@ const BallGame = () => {
     return () => {};
   }, []);
 
-  return <div ref={threeRef}></div>;
+  return (
+    <div ref={threeRef}>
+      <div className="absolute top-20 left-30 text-[2rem] text-black">
+        Hit:{hitCount}
+      </div>
+      <div className="absolute top-28 left-30 text-[2rem] text-black">
+        Timer:
+      </div>
+    </div>
+  );
 };
 
 export default BallGame;
